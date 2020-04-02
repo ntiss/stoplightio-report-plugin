@@ -16,11 +16,11 @@
 package com.arkea.satd.stoplightio.parsers;
 
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
@@ -32,6 +32,8 @@ import com.arkea.satd.stoplightio.model.Collection;
 import com.arkea.satd.stoplightio.model.Scenario;
 import com.arkea.satd.stoplightio.model.Step;
 
+import hudson.FilePath;
+
 /**
  * Parser for a log in console format
  * @author Nicolas TISSERAND
@@ -41,21 +43,21 @@ public final class ConsoleParser {
 
 	// Useful patterns for console parsing
 	private static final Pattern SCENARIO_LINE_PATTERN = Pattern.compile("^\\s{4}(\\S.*) \\((.*)\\)");
-	private static final Pattern STEP_LINE_PATTERN = Pattern.compile("^\\s{6}(.*), (.*) (.*) \\((.*)\\)");
+	private static final Pattern STEP_LINE_PATTERN = Pattern.compile("^\\s{6}(.*), (.*) \\((.*)\\)");
 	private static final Pattern ASSERTION_LINE_PATTERN = Pattern.compile("^\\s{9}(\\S)  (.*)");
 	
 	// E2 9C 93
-	private static final String SUCCESS_MARK = new String(new byte[]{-30, -100, -109}, Charset.forName("UTF-8"));
+	private static final String SUCCESS_MARK = new String(new byte[]{-30, -100, -109}, StandardCharsets.UTF_8);
 	
 	private ConsoleParser() {
 	}
 	
 	/**
 	 * Parser for Prism console output
-	 * @param consoleFile File to be parsed
+	 * @param filepath FilePath to be parsed
 	 * @return a Collection object filled with the results
 	 */
-	public static Collection parse(final File consoleFile) {
+	public static Collection parse(final FilePath filepath) {
 		
 		// Result initialization
 		final Collection collection = new Collection();
@@ -63,12 +65,11 @@ public final class ConsoleParser {
 		int totalTests = 0;
 		int succeededTests = 0;
 		
-		// File parsing		
-		FileInputStream fis = null;
-		BufferedReader br = null;
-		try {
-			fis = new FileInputStream(consoleFile);
-			br = new BufferedReader(new InputStreamReader(fis, "UTF-8"));
+		// File parsing
+		try (InputStream is = filepath.read();
+				InputStreamReader isr = new InputStreamReader(is, StandardCharsets.UTF_8);
+				BufferedReader br = new BufferedReader(isr);
+			) {
 			
 			Scenario currentScenario = null;
 			Step currentStep = null;
@@ -92,9 +93,15 @@ public final class ConsoleParser {
 				if(m.matches()) {
 					currentStep = new Step();
 					currentStep.setLabel(m.group(1));
-					currentStep.setVerb(m.group(2));
-					currentStep.setUrl(m.group(3));
-					currentStep.setDuration(m.group(4));
+					currentStep.setDuration(m.group(3));
+					Matcher m2 = Pattern.compile("(.*) (.*)").matcher(m.group(2));
+					if(m2.matches()) {
+						currentStep.setVerb(m2.group(1));
+						currentStep.setUrl(m2.group(2));
+					} else {
+						currentStep.setVerb("");
+						currentStep.setUrl("");
+					}
 					currentScenario.getSteps().add(currentStep);
 				}
 				
@@ -103,7 +110,11 @@ public final class ConsoleParser {
 				if(m.matches()) {
 					final Assertion assertion = new Assertion();
 					assertion.setSuccess(SUCCESS_MARK.equals(m.group(1)));
-					assertion.setMessage(m.group(2));					
+					assertion.setMessage(m.group(2));
+					
+					if(currentStep.getAssertions()==null){
+						currentStep.setAssertions(new ArrayList<Assertion>() );
+					}
 					currentStep.getAssertions().add(assertion);
 					
 					// Global stats for collection
@@ -112,31 +123,11 @@ public final class ConsoleParser {
 						succeededTests++;
 					}
 				}
-				
 			}
-			
-			br.close();		
-		
-		} catch (IOException e) {
+
+		} catch (IOException | InterruptedException e) {
 			Logger logger = LogManager.getLogManager().getLogger("hudson.WebAppMain");
 			logger.log(Level.SEVERE, "Error while parsing the console default output", e);
-		} finally {
-			if(fis!=null) {
-				try {
-					fis.close();
-				} catch (IOException e) {
-					// Nothing to do
-				}
-			}
-			
-			if(br!=null) {
-				try {
-					br.close();
-				} catch (IOException e) {
-					// Nothing to do
-				}
-			}
-			
 		}
 		
 		// Global stats

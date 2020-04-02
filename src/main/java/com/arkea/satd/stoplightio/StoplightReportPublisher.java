@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 package com.arkea.satd.stoplightio;
-import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.LogManager;
@@ -104,36 +104,33 @@ public class StoplightReportPublisher extends Recorder implements SimpleBuildSte
     @Override
     public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) {
     	// for extends Recorder
-		return perform(build, listener);
+		return perform(build, listener, build.getWorkspace());
     }
 
 	@Override
-	public void perform(Run<?, ?> run, FilePath filePath, Launcher launcher, TaskListener taskListener) throws InterruptedException, IOException {
+	public void perform(Run<?, ?> run, FilePath workspace, Launcher launcher, TaskListener taskListener) {
     	// for implements SimpleBuildStep		
-		perform(run, taskListener);
+		perform(run, taskListener, workspace);
 	}
 
 	/**
 	 * Common method to process the build result file
-	 * @param build
-	 * @param taskListener
-	 * @return
+	 * @param build Current build
+	 * @param taskListener Used to print in the console output
 	 */
-	private boolean perform(Run<?, ?> build, TaskListener taskListener) {
+	private boolean perform(final Run<?, ?> build, final TaskListener taskListener, FilePath ws) {
 		
-    	File f;
+    	final FilePath f;
     	if(consoleOrFile==null || consoleOrFile.isEmpty() || CONSOLE.equals(consoleOrFile)) {
-    		f = build.getLogFile();
+    		f = new FilePath(build.getLogFile());
     	} else {
         	String wsBasePath = "";
         	try {
         		wsBasePath = build.getEnvironment(taskListener).get("WORKSPACE");
 			} catch (IOException | InterruptedException e) {
-				if(taskListener!=null) {
-					taskListener.getLogger().println("The environment variable WORKSPACE doesn't exists");
-				}
+				taskListener.getLogger().println("The environment variable WORKSPACE does not exists");
 				Logger log = LogManager.getLogManager().getLogger("hudson.WebAppMain");
-				log.log(Level.SEVERE, "The environment variable WORKSPACE doesn't exists", e);
+				log.log(Level.SEVERE, "The environment variable WORKSPACE does not exists", e);
 			}
 
 			if(wsBasePath==null) {
@@ -142,29 +139,28 @@ public class StoplightReportPublisher extends Recorder implements SimpleBuildSte
         	String prepareFileLocation = resultFile
         			.replace("${WORKSPACE}", wsBasePath)
         			.replace("%WORKSPACE%", wsBasePath);
-        	f = new File(prepareFileLocation);    		
+        	f = new FilePath(ws,prepareFileLocation);
     	}
 
-    	if(f.exists()) {
-    		if(taskListener!=null) taskListener.getLogger().println("Parsing " + f.getAbsolutePath());
-	   		
-	   		Collection coll;
-	   		try {
-	   			coll = JsonResultParser.parse(f);
-	   		} catch(Exception e) {
-	   			coll = ConsoleParser.parse(f);	   			
-	   		}
-	
-			StoplightReportBuildAction buildAction = new StoplightReportBuildAction(build, coll);
-			build.addAction(buildAction);
-			return true;			
-    	} else {
-    		if(taskListener!=null) taskListener.getLogger().println("The file " + resultFile + " doesn't exists");
-    		return false;
-    	}
+		try {
+			if(!f.exists()) {
+                throw new FileNotFoundException();
+			}
+            if(taskListener!=null){
+                taskListener.getLogger().println("Parsing " + f.toURI());
+            }
+            
+            Collection coll= getCollectionFromFile(f);
+            StoplightReportBuildAction buildAction = new StoplightReportBuildAction(build, coll);
+            build.addAction(buildAction);
+            return true;
+		} catch (IOException | InterruptedException e) {
+            if(taskListener!=null){
+                taskListener.getLogger().println("The file " + f.getName() + " doesn't exists");
+            }
+            return false;
+		}
 	}
-	
-    
     
     // Overridden for better type safety.
     // If your plugin doesn't really define any property on Descriptor,
@@ -216,6 +212,7 @@ public class StoplightReportPublisher extends Recorder implements SimpleBuildSte
         /**
          * Indicates that this builder can be used with all kinds of project types
          */
+        @SuppressWarnings("rawtypes")
         public boolean isApplicable(Class<? extends AbstractProject> aClass) {
             return true;
         }
@@ -229,5 +226,15 @@ public class StoplightReportPublisher extends Recorder implements SimpleBuildSte
 
     }
 	
+    
+    private Collection getCollectionFromFile(FilePath input) {
+        Collection coll;
+        try {
+            coll = JsonResultParser.parse(input);
+        } catch(Exception e) {
+        	coll = ConsoleParser.parse(input);
+        }
+        return coll;
+    }
 }
 
